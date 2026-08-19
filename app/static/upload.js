@@ -4,13 +4,24 @@
   var fileInput = document.getElementById("file-input");
   var status = document.getElementById("status");
   var progressBar = document.getElementById("upload-progress");
+  var isUploading = false;
 
   function setStatus(text, cls) {
     status.textContent = text;
     status.className = "status" + (cls ? " " + cls : "");
   }
 
+  // 업로드(전송 + 서버 분석) 도중에는 dropzone을 비활성화한다 — 진행 중인 업로드가
+  // 끝나기 전에 두 번째 파일을 겹쳐 올리면 서로 다른 문서의 진행률/상태 표시가
+  // 섞여 보이므로, 한 번에 1개 문서만 받는다.
+  function setUploading(value) {
+    isUploading = value;
+    dropzone.classList.toggle("disabled", value);
+    fileInput.disabled = value;
+  }
+
   function upload(file) {
+    if (isUploading) return;
     if (file.type !== "application/pdf") {
       setStatus("PDF 파일만 업로드할 수 있습니다.", "error");
       return;
@@ -20,6 +31,7 @@
       return;
     }
 
+    setUploading(true);
     var formData = new FormData();
     formData.append("file", file);
 
@@ -46,6 +58,7 @@
       progressBar.hidden = true;
       if (xhr.status < 200 || xhr.status >= 300) {
         setStatus("업로드 실패 (" + xhr.status + ")", "error");
+        setUploading(false);
         return;
       }
       var data = JSON.parse(xhr.responseText);
@@ -59,6 +72,7 @@
     xhr.addEventListener("error", function () {
       progressBar.hidden = true;
       setStatus("네트워크 오류로 업로드에 실패했습니다.", "error");
+      setUploading(false);
     });
 
     xhr.open("POST", "/api/upload");
@@ -66,6 +80,7 @@
   }
 
   dropzone.addEventListener("click", function () {
+    if (isUploading) return;
     fileInput.click();
   });
   fileInput.addEventListener("change", function () {
@@ -73,6 +88,7 @@
   });
   dropzone.addEventListener("dragover", function (e) {
     e.preventDefault();
+    if (isUploading) return;
     dropzone.classList.add("dragover");
   });
   dropzone.addEventListener("dragleave", function () {
