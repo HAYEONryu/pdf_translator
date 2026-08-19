@@ -69,7 +69,11 @@ def export_docx(doc_sha: str, doc_title: str, pages: list[dict]) -> bytes:
             if b["type"] == "figure":
                 # PUA 폰트로 깨지는 텍스트 대신 원본 그대로 보이는 이미지로 잘라 넣는다.
                 crop = render_crop_png(pdf_path, pg["page_no"], b["bbox"])
-                document.add_picture(BytesIO(crop), width=Inches(6))  # 본문 폭에 맞춰 고정
+                # 폭을 6in으로 고정하면 원래 좁고 납작한 크롭(예: 라벨 한 줄)이 몇 배로
+                # 확대돼 흐릿하게 보인다 (실사용 중 발견) — bbox 실제 폭(pt→in)을 쓰고
+                # 본문 폭(6in)보다 클 때만 줄인다. 확대는 절대 하지 않는다.
+                natural_width_in = (b["bbox"][2] - b["bbox"][0]) / 72.0
+                document.add_picture(BytesIO(crop), width=Inches(min(natural_width_in, 6.0)))
                 continue
             if b["type"] not in _TRANSLATABLE:
                 continue

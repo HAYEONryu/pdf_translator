@@ -37,18 +37,11 @@
         var height = ((b.bbox[3] - b.bbox[1]) / pageHeight) * 100;
         return (
           '<div class="overlay' + (isFigure ? " is-figure" : "") + '" data-block-id="' + b.id +
-          '" data-verify="' + b.verify.status + '"' + (isFigure ? ' data-clickable="false"' : "") +
+          '" data-verify="' + b.verify.status + '"' +
           ' style="left:' + left + '%;top:' + top + '%;width:' + width + '%;height:' + height + '%;"></div>'
         );
       })
       .join("");
-  }
-
-  function cropUrl(pageNo, bbox) {
-    return (
-      "/doc/" + sha + "/crop/" + pageNo + ".png?x0=" + bbox[0] + "&top=" + bbox[1] +
-      "&x1=" + bbox[2] + "&bottom=" + bbox[3]
-    );
   }
 
   function blockInnerHtml(b, pageNo) {
@@ -59,11 +52,17 @@
       }).join("") + "</table>";
     }
     if (b.type === "figure") {
-      // PDF 내장 Symbol/수식 폰트의 Private Use Area 코드로 저장된 텍스트라, 텍스트로는
-      // 원래 폰트 없이 읽을 수 없다 (예: , ). 원본 그대로 이미지로 잘라서 보여준다
-      // — 우클릭으로 이미지째 복사할 수 있다.
-      var caption = b.source ? "수식 (원본 이미지)" : "그림 (번역 대상 아님)";
-      return '<img class="formula-crop" src="' + cropUrl(pageNo, b.bbox) + '" alt="' + caption + '" title="' + caption + '">';
+      // 대조 뷰는 왼쪽에 원문 페이지 전체가 이미지로 떠 있으므로, 오른쪽에 크롭을
+      // 또 넣지 않는다 — 벡터 클러스터링이 실패하면 깨진 크롭이 그대로 노출되고,
+      // 좁은 크롭이 패널 폭에 맞춰 늘어나 흐릿하게 확대돼 보이는 문제도 있었다
+      // (실사용 중 발견). 왼쪽 원문 클릭으로 대조하고 여기는 안내만 보여준다.
+      // 크롭 이미지는 원문이 없는 DOCX/HTML 내보내기에서만 쓴다.
+      if (b.source) {
+        // 수식은 PUA 폰트라 텍스트로 못 읽지만 원문 자체는 보존돼 있으니, 이미지
+        // 대신 텍스트로 보여줘 그대로 복사할 수 있게 한다.
+        return '<div class="formula-text" title="수식 원문 - 번역 대상 아님, 복사 가능">' + escapeHtml(b.source) + "</div>";
+      }
+      return '<div class="figure-ref">[그림 - 좌측 원문 참조]</div>';
     }
     if (b.type === "header_footer") return '<div class="hf-text">' + escapeHtml(b.source) + "</div>";
     return '<div class="block-text">' + escapeHtml(b.ko || b.source) + "</div>";
@@ -83,7 +82,7 @@
   function blocksHtml(blocks, pageNo) {
     return blocks
       .map(function (b) {
-        var clickAttr = b.type === "figure" || b.type === "header_footer" ? ' data-clickable="false"' : "";
+        var clickAttr = b.type === "header_footer" ? ' data-clickable="false"' : "";
         return (
           '<div class="block block-' + b.type + '" data-block-id="' + b.id + '" data-verify="' +
           b.verify.status + '"' + clickAttr + ">" + blockInnerHtml(b, pageNo) + badgeHtml(b) + "</div>"

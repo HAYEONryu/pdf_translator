@@ -4,3 +4,8 @@ sheath,시스,외피 아님 - 사내 표준
 armour,외장,
 XLPE,가교폴리에틸렌(XLPE),약어 유지
 lay-up,연합,
+W/mK,W/mK,열전도율 단위 - 변환 금지
+Ws/kgK,Ws/kgK,비열 단위 - 변환 금지
+kg/m³,kg/m³,밀도 단위
+thermal conductivity,열전도율,
+specific heat,비열,

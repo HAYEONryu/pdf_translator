@@ -4,6 +4,7 @@ import re
 import pdfplumber
 
 from app.config import (
+    FIGURE_MERGE_MAX_GAP_PT,
     FIGURE_TABLE_MARGIN_PT,
     FORMULA_DIGIT_TOKEN_RATIO,
     FORMULA_EQ_WORD_MAX_RATIO,
@@ -24,6 +25,43 @@ from app.config import (
 # 고유 패턴이라, 아주 짧은 수식 조각("Ra ⋅Gr . (2.12)")도 토큰 수와 무관하게 잡아낸다.
 _EQUATION_NUMBER_RE = re.compile(r"\(\d{1,2}\.\d{1,3}[a-z]?\)")
 _TRAILING_PUNCT_RE = re.compile(r"[.,;:!?)]+$")
+
+# PDF 내장 Symbol 폰트는 그리스 문자·연산자를 유니코드 매핑 없이 PUA(U+F000대,
+# "원래 코드 + 0xF000")로 인코딩하는 경우가 많다 — 실사용 중 발견: "λ = 0,40W/mK"가
+# "  0,40W/mK"로 나와 화면에 빈 네모/미표시 문자로 보임. Symbol 폰트는
+# a-z를 QWERTY 순서로 그리스 소문자에 대응시키는 게 40년 넘게 고정된 업계 표준
+# 인코딩이라(PostScript Symbol font), 이 규칙으로 역매핑한다. 확신 없는 나머지
+# PUA 문자는 지우지 않고 그대로 둔다 — 지우면 그 문자가 문단의 유일한 내용일 때
+# (실사용 중 발견, p71: 단독 기호 하나짜리 블록) 텍스트가 통째로 사라진다.
+_SYMBOL_FONT_MAP: dict[int, str] = {}
+for _lat, _grk in zip("abgdezhqiklmnxoprstufcyw", "αβγδεζηθικλμνξοπρστυφχψω"):
+    _SYMBOL_FONT_MAP[0xF000 + ord(_lat)] = _grk
+for _lat, _grk in zip("ABGDEZHQIKLMNXOPRSTUFCYW", "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ"):
+    _SYMBOL_FONT_MAP[0xF000 + ord(_lat)] = _grk
+_SYMBOL_FONT_MAP[0xF03D] = "="
+_SYMBOL_FONT_MAP[0xF02B] = "+"
+_SYMBOL_FONT_MAP[0xF0B7] = "·"
+_SYMBOL_FONT_MAP[0xF0D7] = "×"
+_PUA_RANGE_RE = re.compile(r"[-]")
+
+
+def _fix_symbol_font_glyphs(text: str) -> str:
+    return _PUA_RANGE_RE.sub(lambda m: _SYMBOL_FONT_MAP.get(ord(m.group()), m.group()), text)
+
+
+# 블록 확정 후 노이즈 정리 — 구두점·공백 잔여물만 정리한다 (그리스 문자·수학 기호
+# 자체는 위에서 정상 유니코드로 복원된 뒤이므로 그대로 둔다).
+_NOISE_COMMA_RE = re.compile(r"\s*,\s*,+")
+_NOISE_SPACE_RE = re.compile(r"[ \t]{2,}")
+_NOISE_EDGE_RE = re.compile(r"^[\s,;·]+|[\s,;·]+$")
+
+
+def _clean_block_noise(text: str) -> str:
+    text = _fix_symbol_font_glyphs(text)
+    text = _NOISE_COMMA_RE.sub(",", text)
+    text = _NOISE_SPACE_RE.sub(" ", text)
+    text = _NOISE_EDGE_RE.sub("", text)
+    return text.strip()
 
 
 def _is_real_word(token: str) -> bool:
@@ -106,12 +144,117 @@ def _classify_table_candidates(page):
             valid_tables.append((t, cells))
         else:
             figure_bboxes.append(t.bbox)
-    return valid_tables, figure_bboxes
+    diagram_bboxes = _detect_vector_diagram_bboxes(page, [t.bbox for t, _cells in valid_tables])
+    return valid_tables, _merge_close_bboxes(figure_bboxes + diagram_bboxes, FIGURE_MERGE_MAX_GAP_PT)
+
+
+_DIAGRAM_CLUSTER_GAP_PT = 35.0
+_DIAGRAM_MIN_PRIMITIVES = 8
+
+
+def _cluster_primitive_bboxes(items: list, max_gap: float) -> list:
+    """items: (bbox, is_image) 목록. (bbox, 원소 개수, 이미지 포함 여부)로 뭉친다.
+    개수는 이 클러스터가 "진짜 도식"인지 판단하는 데 쓴다 (선 하나짜리 장식 밑줄과
+    구분) — 단, 래스터 이미지가 하나라도 있으면 그 자체로 이미 도식이므로 개수와
+    무관하게 인정한다 (실사용 중 발견: 실린더 도면이 이미지 하나뿐이라 rect/line
+    개수 기준을 못 넘어 사라짐)."""
+    if not items:
+        return []
+    items = sorted(items, key=lambda it: it[0][1])
+    b0, img0 = items[0]
+    clusters = [[list(b0), 1, img0]]
+    for b, is_image in items[1:]:
+        bbox, count, has_image = clusters[-1]
+        x_overlap = not (b[2] <= bbox[0] or bbox[2] <= b[0])
+        gap = b[1] - bbox[3]
+        if x_overlap and gap <= max_gap:
+            bbox[0] = min(bbox[0], b[0])
+            bbox[1] = min(bbox[1], b[1])
+            bbox[2] = max(bbox[2], b[2])
+            bbox[3] = max(bbox[3], b[3])
+            clusters[-1][1] += 1
+            clusters[-1][2] = has_image or is_image
+        else:
+            clusters.append([list(b), 1, is_image])
+    return [(tuple(bbox), count, has_image) for bbox, count, has_image in clusters]
+
+
+def _detect_vector_diagram_bboxes(page, valid_table_bboxes: list) -> list:
+    """격자선이 없는 도식(단면도·사진형 도면 등)은 find_tables()가 후보로도 못 잡아서
+    라벨이 본문 텍스트로 새어나간다 (실사용 중 발견: p70 "GOK Mutterboden ..." 단면도,
+    실린더 도면 옆 "WGB 0001" 라벨). 벡터 도형(rect/line/curve)과 래스터 이미지가
+    뭉친 영역을 도식으로 본다 — curves(해칭·곡선 디테일)와 images(사진형 도면)를
+    빼면 그림 본체가 통째로 안 잡히고 라벨 하나만 남은 좁고 납작한 영역이 잡힌다."""
+    items = [
+        ((p["x0"], p["top"], p["x1"], p["bottom"]), False)
+        for p in (*page.rects, *page.lines, *page.curves)
+    ]
+    items += [((im["x0"], im["top"], im["x1"], im["bottom"]), True) for im in page.images]
+    bboxes = []
+    for bbox, count, has_image in _cluster_primitive_bboxes(items, _DIAGRAM_CLUSTER_GAP_PT):
+        if not has_image and count < _DIAGRAM_MIN_PRIMITIVES:
+            continue
+        if any(_bbox_overlap(bbox, t) for t in valid_table_bboxes):
+            continue  # 실제 데이터 표의 테두리/구분선 — 도식이 아니라 표
+        bboxes.append(bbox)
+    return bboxes
+
+
+def _merge_close_bboxes(bboxes: list, max_gap: float) -> list:
+    """세로로 가깝고 가로로 겹치는 bbox를 하나로 합친다. 차트 하나가 표 오탐지 후보
+    여러 개로 쪼개지면 각각 따로 크롭돼 부분만 확대된 이미지가 나온다 (실사용 중 발견, p19)."""
+    if not bboxes:
+        return []
+    boxes = sorted((list(b) for b in bboxes), key=lambda b: b[1])
+    merged = [boxes[0]]
+    for b in boxes[1:]:
+        last = merged[-1]
+        x_overlap = not (b[2] <= last[0] or last[2] <= b[0])
+        gap = b[1] - last[3]
+        if x_overlap and gap <= max_gap:
+            last[0] = min(last[0], b[0])
+            last[1] = min(last[1], b[1])
+            last[2] = max(last[2], b[2])
+            last[3] = max(last[3], b[3])
+        else:
+            merged.append(b)
+    return [tuple(m) for m in merged]
 
 
 def _word_in_zones(word, zones) -> bool:
     wbox = (word["x0"], word["top"], word["x1"], word["bottom"])
     return any(_bbox_overlap(wbox, z) for z in zones)
+
+
+_SUPERSCRIPT_SIZE_RATIO = 0.8
+_SUPERSCRIPT_VERTICAL_SHIFT_PT = 1.0
+_SUPERSCRIPT_GAP_PT = 1.5
+
+
+def _merge_superscripts(line: list) -> list:
+    """상첨자/하첨자는 extract_words()가 폰트 크기·베이스라인이 다르다는 이유로
+    같은 줄이어도 별도 단어로 떼어낸다 (실사용 중 발견: "963kg/m" + 상첨자 "3" →
+    "963kg/m 3"로 깨짐). 바로 붙어 있고(gap 작음) 폰트가 뚜렷이 작고 수직으로
+    어긋난 경우에만 원 단어에 도로 붙인다 — 일반 단어 사이 공백은 건드리지 않는다."""
+    if not line:
+        return line
+    merged = [dict(line[0])]
+    for w in line[1:]:
+        prev = merged[-1]
+        gap = w["x0"] - prev["x1"]
+        size_drop = w.get("size", 0) > 0 and w["size"] < prev.get("size", 0) * _SUPERSCRIPT_SIZE_RATIO
+        vertical_shift = (
+            w["top"] < prev["top"] - _SUPERSCRIPT_VERTICAL_SHIFT_PT
+            or w["bottom"] > prev["bottom"] + _SUPERSCRIPT_VERTICAL_SHIFT_PT
+        )
+        if gap <= _SUPERSCRIPT_GAP_PT and size_drop and vertical_shift:
+            prev["text"] += w["text"]
+            prev["x1"] = max(prev["x1"], w["x1"])
+            prev["top"] = min(prev["top"], w["top"])
+            prev["bottom"] = max(prev["bottom"], w["bottom"])
+        else:
+            merged.append(dict(w))
+    return merged
 
 
 def _group_words_to_blocks(words, page_height):
@@ -133,6 +276,7 @@ def _group_words_to_blocks(words, page_height):
     line_info = []
     for line in lines:
         line = sorted(line, key=lambda w: w["x0"])
+        line = _merge_superscripts(line)
         text = " ".join(w["text"] for w in line)
         x0 = min(w["x0"] for w in line)
         x1 = max(w["x1"] for w in line)
@@ -154,7 +298,9 @@ def _group_words_to_blocks(words, page_height):
         top = min(li["bbox"][1] for li in para_lines)
         x1 = max(li["bbox"][2] for li in para_lines)
         bottom = max(li["bbox"][3] for li in para_lines)
-        text = " ".join(li["text"] for li in para_lines)
+        text = _clean_block_noise(" ".join(li["text"] for li in para_lines))
+        if not text:
+            return  # 노이즈 정리 후 남는 게 없으면 블록 자체를 만들지 않는다
         avg_size = sum(li["size"] for li in para_lines) / len(para_lines)
         is_heading = (
             len(para_lines) == 1
@@ -162,12 +308,14 @@ def _group_words_to_blocks(words, page_height):
             and avg_size >= median_size * HEADING_SIZE_RATIO
             and len(text) < HEADING_MAX_CHARS
         )
+        # 단독 라틴 1~2글자(숫자 제외)는 도식에서 새어나온 라벨/기호일 뿐 문장이 아니다.
+        is_stray_symbol = len(text) <= 2 and not text.isdigit()
         if bottom <= header_cut or top >= footer_cut:
             btype = "header_footer"
+        elif is_stray_symbol or _looks_like_formula(text):
+            btype = "figure"  # 수식/도식 잔여 기호 — 번역·검증 대상에서 제외
         elif is_heading:
             btype = "heading"
-        elif _looks_like_formula(text):
-            btype = "figure"  # 수식 오탐지 — 번역·검증 대상에서 제외 (figure와 동일 취급)
         else:
             btype = "paragraph"
         blocks.append({"type": btype, "bbox": [x0, top, x1, bottom], "source": text})
@@ -222,10 +370,11 @@ def extract_page_blocks(pdf_path, page_no: int) -> dict:
 
         valid_tables, figure_bboxes = _classify_table_candidates(page)  # ①②
 
-        table_zones = [
-            _expand_bbox(t.bbox, FIGURE_TABLE_MARGIN_PT, page_width, page_height)
-            for t, _cells in valid_tables
-        ]
+        # 유효한 표는 마진 없이 raw bbox로 제외한다 — figure와 달리 표는 이미지로
+        # 크롭되지 않으므로, 마진에 걸린 캡션·직전 문장이 통째로 사라져 어디에도
+        # 안 남는다 (실사용 중 발견, p18 "Tab. 4:" 캡션·앞 문장 소실). figure는 마진
+        # 영역이 곧 크롭 이미지라 축 라벨·범례가 이미지 안에 시각적으로 남으므로 유지.
+        table_zones = [tuple(t.bbox) for t, _cells in valid_tables]
         figure_zones = [
             _expand_bbox(b, FIGURE_TABLE_MARGIN_PT, page_width, page_height)
             for b in figure_bboxes
@@ -250,7 +399,11 @@ def extract_page_blocks(pdf_path, page_no: int) -> dict:
                 "ko": None,
                 "verify": {"status": "ok", "missing": [], "reason": None},
             })
-        for fb in figure_bboxes:
+        for fb in figure_zones:
+            # 크롭 이미지는 마진 확장된 zone 그대로 써야 한다 — 텍스트 제외에는
+            # 마진을 적용하면서 크롭은 raw bbox로 하면, 마진 안에 있던 캡션·축
+            # 라벨이 텍스트로도 안 남고 이미지에도 안 잡혀 완전히 소실된다
+            # (실사용 중 발견, p59 "Abb. 26:" 캡션 소실).
             blocks.append({
                 "type": "figure",
                 "bbox": list(fb),
@@ -316,10 +469,11 @@ def _demo() -> None:
     for b in p44["blocks"]:
         assert b["id"].startswith("p044-b")
 
-    # p1: 순수 텍스트 페이지 — 표/figure 없이 heading/paragraph만 나와야 함
+    # p1: 표지 로고 이미지 하나 + 나머지는 heading/paragraph — 표는 없어야 함
     p1 = extract_page_blocks(pdf_path, 1)
     assert p1["has_text_layer"] is True
-    assert all(b["type"] in ("heading", "paragraph", "header_footer") for b in p1["blocks"])
+    assert all(b["type"] in ("heading", "paragraph", "header_footer", "figure") for b in p1["blocks"])
+    assert sum(1 for b in p1["blocks"] if b["type"] == "figure") == 1, "표지 로고 이미지가 figure로 안 잡힘"
 
     # 수식 오탐지: 사용자가 실제로 겪은 깨진 문단 예시 (① 짧은 토큰 다수)
     assert _looks_like_formula("x 4 8 f y s ; x 2 10 7 k (2.2) s 192 0,8 x 4 s R s s DC")
@@ -356,6 +510,25 @@ def _demo() -> None:
             if b["type"] == "header_footer" and "Seite" in (b["source"] or ""):
                 footer_hits += 1
     assert footer_hits == 3, f"풋터가 header_footer로 안 잡힘: {footer_hits}/3"
+
+    # 상첨자 병합: "963kg/m" + 상첨자 "3"이 공백 없이 붙어야 한다 (실사용 중 발견, p20)
+    all_p20_text = " ".join(b["source"] or "" for b in p20["blocks"])
+    assert "963kg/m3" in all_p20_text, "상첨자가 원 단어에 안 붙음"
+    assert "963kg/m 3" not in all_p20_text, "상첨자가 공백 채로 남음"
+
+    # Symbol 폰트 PUA 글리프 복원: "λ"(lambda), "ρ"(rho)가 PUA가 아닌 실제 유니코드로
+    # 나와야 한다 (실사용 중 발견 — 화면에 빈 네모로 보이던 문제)
+    assert "λ" in all_p20_text, "람다(λ)가 PUA에서 복원 안 됨"
+    assert "ρ" in all_p20_text, "로(ρ)가 PUA에서 복원 안 됨"
+
+    # 격자 없는 벡터 도식(단면도) 라벨 유출 방지: p70 "GOK Mutterboden ..." 라벨이
+    # 더는 본문 paragraph로 새지 않고 figure bbox 안에 흡수돼야 한다 (실사용 중 발견)
+    p70 = extract_page_blocks(pdf_path, 70)
+    p70_paragraph_text = " ".join(
+        b["source"] or "" for b in p70["blocks"] if b["type"] in ("paragraph", "heading")
+    )
+    assert "GOK" not in p70_paragraph_text, "도식 라벨이 본문 블록으로 유출됨"
+    assert any(b["type"] == "figure" for b in p70["blocks"]), "벡터 도식이 figure로 안 잡힘"
 
     print("blocks.py self-check OK")
 

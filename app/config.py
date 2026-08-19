@@ -8,6 +8,11 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")).resolve()
 # 표/figure 판별 (SPEC.md §5.1 ①③) — ponytail: 휴리스틱 값, 실제 문서로 튜닝 필요
 TABLE_MIN_FILLED_RATIO = 0.3
 FIGURE_TABLE_MARGIN_PT = 36.0
+# 차트 하나가 표 오탐지 후보 여러 개로 쪼개지면 각각 따로 크롭돼 부분만 확대된 이미지가
+# 나온다(실사용 중 발견, p19). 세로로 이 거리 이내면서 가로로 겹치는 figure 후보는 하나로
+# 합친다 — ponytail: 보수적으로 잡음(60pt), 문서 전체 재스캔으로 과도하게 합쳐지지
+# 않는지 확인 후 값을 정함. 너무 멀리 떨어진 후보(예: 120pt+)까지 합치려면 이 값을 올릴 것.
+FIGURE_MERGE_MAX_GAP_PT = 60.0
 
 # 블록 그룹핑 (SPEC.md §5.1)
 # ★ 5%(0.05)는 실제 샘플 문서의 풋터를 못 잡았다 — 풋터가 페이지 높이의 94.0%(0.940)에
@@ -50,7 +55,7 @@ MODEL_SCANNED = "gpt-5.6-terra"
 # 반드시 올린다 — 캐시 키가 이 값+용어집+모델만 보므로, 안 올리면 로직을 고쳐도 옛날
 # 캐시가 그대로 나온다 (실사용 중 발견: 지금은 figure로 잡힐 블록이 예전 캐시엔
 # paragraph로 번역된 채 남아있었음).
-PROMPT_VER = "v2"
+PROMPT_VER = "v3"
 
 # 규격번호/품번 마스킹 패턴 (SPEC.md §5.4) — ponytail: 휴리스틱, 실제 문서로 튜닝 필요
 #
