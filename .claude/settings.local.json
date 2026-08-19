@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m venv .venv)",
+      "Bash(curl -s http://127.0.0.1:8000/_mock/view)",
+      "Bash(kill %1)",
+      "Bash(pkill -f \"uvicorn app.main:app\")",
+      "Bash(rm -f uvicorn.log)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:8000/_mock/view)",
+      "Bash(netstat -ano)",
+      "Bash(taskkill *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" --max-time 3 http://127.0.0.1:8000/_mock/view)",
+      "Bash(curl *)",
+      "Bash(python -c ' *)",
+      "Read(//tmp/**)"
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+
+# 업로드된 문서·번역 캐시·렌더 — 로컬 데이터, 커밋하지 않는다. 용어집은 예외로 추적한다.
+data/docs/
+!data/glossary.csv
+
+samplePDF.pdf

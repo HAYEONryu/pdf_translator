@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>{{ meta.filename }} - 페이지 선택</title>
+<link rel="stylesheet" href="/static/select.css">
+<script id="outline-data" type="application/json">{{ meta.outline | tojson }}</script>
+</head>
+<body data-sha="{{ meta.sha256 }}" data-page-count="{{ meta.page_count }}">
+  <header class="topbar">
+    <h1>{{ meta.filename }}</h1>
+    <span class="sub">{{ meta.page_count }}페이지{% if not meta.has_text_layer %} · 스캔본 가능성{% endif %}</span>
+  </header>
+
+  <div class="layout">
+    <aside class="outline">
+      <h2>목차</h2>
+      {% if meta.outline %}
+      <ul id="outline-list">
+        {% for item in meta.outline %}
+        <li style="padding-left: {{ (item.level - 1) * 12 }}px">
+          <button type="button" class="outline-item" data-index="{{ loop.index0 }}">{{ item.title }}</button>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="hint">목차 정보가 없습니다.</p>
+      {% endif %}
+    </aside>
+
+    <main class="thumb-area">
+      <div class="thumb-grid">
+        {% for page_no in range(1, meta.page_count + 1) %}
+        <button type="button" class="thumb" data-page="{{ page_no }}">
+          <img src="/doc/{{ meta.sha256 }}/thumb/{{ '%03d'|format(page_no) }}.png" loading="lazy" alt="p.{{ page_no }}">
+          <span class="thumb-label">{{ page_no }}</span>
+          {% if page_no in meta.table_pages %}<span class="badge badge-table">표</span>{% endif %}
+          {% if page_no in cached_pages %}<span class="badge badge-cached">✓</span>{% endif %}
+        </button>
+        {% endfor %}
+      </div>
+    </main>
+  </div>
+
+  <footer class="range-bar">
+    <input type="text" id="range-input" placeholder="예: 12-18, 25, 40-47">
+    <span id="estimate" class="estimate"></span>
+    <a id="go-btn" class="go-btn disabled" href="#">대조 뷰 열기</a>
+  </footer>
+
+  <script src="/static/select.js"></script>
+</body>
+</html>

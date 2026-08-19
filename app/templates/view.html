@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>{{ doc_title }} - 대조 뷰</title>
+<link rel="stylesheet" href="/static/view.css">
+<script id="view-data" type="application/json">
+{{ {"sha": sha, "docTitle": doc_title, "pageNumbers": page_numbers, "pageWidth": page_width, "pageHeight": page_height} | tojson }}
+</script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="progress" id="progress-label">{{ page_numbers|length }}페이지 선택됨</div>
+    <div class="counts">
+      <span class="warn-count" id="warn-count">검증 경고 0건</span>
+      <span class="skip-count" id="skip-count">검증 생략 0건</span>
+    </div>
+    <div class="actions">
+      <a id="html-dl" class="dl-btn" href="/doc/{{ sha }}/export.html?range={{ range_str }}">HTML 다운로드</a>
+      <a id="docx-dl" class="dl-btn" href="/doc/{{ sha }}/export.docx?range={{ range_str }}">DOCX 다운로드</a>
+    </div>
+  </header>
+  <main class="compare">
+    <section class="pane source-pane" id="source-pane">
+      {% for page_no in page_numbers %}
+      <div class="page-wrap" id="src-p{{ '%03d'|format(page_no) }}" data-page-no="{{ page_no }}"
+           style="aspect-ratio: {{ page_width }} / {{ page_height }};">
+        <img src="/doc/{{ sha }}/render/{{ '%03d'|format(page_no) }}.png" alt="p.{{ page_no }} 원문" loading="lazy">
+      </div>
+      <div class="page-label">p.{{ '%03d'|format(page_no) }}</div>
+      {% endfor %}
+    </section>
+    <section class="pane target-pane" id="target-pane">
+      {% for page_no in page_numbers %}
+      <div class="blocks" id="tgt-p{{ '%03d'|format(page_no) }}" data-page-no="{{ page_no }}">
+        <div class="page-skeleton">p.{{ '%03d'|format(page_no) }} 처리 대기 중...</div>
+      </div>
+      {% endfor %}
+    </section>
+  </main>
+  <script src="/static/view.js"></script>
+</body>
+</html>

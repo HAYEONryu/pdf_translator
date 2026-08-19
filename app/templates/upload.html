@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>사내 기술문서 번역 도구</title>
+<link rel="stylesheet" href="/static/upload.css">
+</head>
+<body>
+  <h1>사내 기술문서 번역 도구</h1>
+  <div id="dropzone" class="dropzone">
+    <p>PDF 파일을 여기로 끌어다 놓거나 클릭해서 선택하세요</p>
+    <p class="hint">PDF만 · 최대 100MB</p>
+    <input type="file" id="file-input" accept="application/pdf" hidden>
+  </div>
+  <progress id="upload-progress" class="upload-progress" value="0" max="100" hidden></progress>
+  <div id="status" class="status"></div>
+
+  {% if recent_docs %}
+  <h2>최근 문서</h2>
+  <ul class="recent-list">
+    {% for d in recent_docs %}
+    <li>
+      <a href="/doc/{{ d.sha256 }}/select">{{ d.filename }}</a>
+      <span class="meta">— 번역됨 {{ d.translated_page_count }} / {{ d.page_count }}페이지</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <script src="/static/upload.js"></script>
+</body>
+</html>
