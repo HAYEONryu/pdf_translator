@@ -153,6 +153,11 @@ def check_text_block(source: str | None, translated: str | None) -> dict:
             if tgt_c.get(val, 0) < cnt:
                 missing.append(val)
 
+    # 시스템 프롬프트 8번 조항(줄바꿈·불릿 보존)이 지켜졌는지 검사 — LLM이 목록 항목을
+    # 한 줄로 합쳐버리면 줄 수가 달라진다.
+    if source.count("\n") != (translated or "").count("\n"):
+        missing.append("줄바꿈 구조 불일치")
+
     return {"status": "warn" if missing else "ok", "missing": missing, "reason": None}
 
 
@@ -224,6 +229,13 @@ def _demo() -> None:
     # 콤마 없는 4자리 이상 순수 정수(예: 연도)는 영어 표기로 인정해야 함
     r = check_text_block("Published in February 2026.", "2026년 2월에 발행됨.")
     assert r["status"] == "ok", r
+
+    # 목록 줄바꿈이 유지되면 -> ok, LLM이 목록 항목을 한 줄로 합치면 -> warn
+    bulleted = "• Item one\n• Item two\n• Item three"
+    r = check_text_block(bulleted, "• 항목 하나\n• 항목 둘\n• 항목 셋")
+    assert r["status"] == "ok", r
+    r = check_text_block(bulleted, "항목 하나, 항목 둘, 항목 셋")
+    assert r["status"] == "warn" and "줄바꿈 구조 불일치" in r["missing"], r
 
     # 공백 천단위(SI) + 유니코드 분수 + 하이픈 변형은 언어 무관 정규화로 흡수
     normalized = normalize_locale_agnostic("Range: 30–50 ℃, load ½ of 1 234 N")

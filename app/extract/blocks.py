@@ -1,11 +1,11 @@
 """bbox 블록 추출: 표/figure 후보 검증·마진 확장 포함 (SPEC.md §5.1, ①②③④ 순서 고정)."""
 import re
+from dataclasses import dataclass
 
 import pdfplumber
 
 from app.config import (
     FIGURE_MERGE_MAX_GAP_PT,
-    FIGURE_TABLE_MARGIN_PT,
     FORMULA_DIGIT_TOKEN_RATIO,
     FORMULA_EQ_WORD_MAX_RATIO,
     FORMULA_MIN_TOKENS,
@@ -14,10 +14,59 @@ from app.config import (
     HEADER_FOOTER_MARGIN_RATIO,
     HEADING_MAX_CHARS,
     HEADING_SIZE_RATIO,
-    PARAGRAPH_GAP_PT,
+    MIN_LONG_CELLS,
+    MIN_TABLE_CELLS,
     RENDER_SCALE,
     TABLE_MIN_FILLED_RATIO,
 )
+
+
+@dataclass
+class PageMetrics:
+    """페이지별 본문 폰트 크기·줄간격 실측치. 문서마다 폰트 크기가 달라 고정 pt
+    상수는 어떤 문서에선 너무 크고 어떤 문서에선 너무 작다 — 아래 임계값들을
+    이 실측치의 배수로 계산해 문서에 맞춰 스케일한다."""
+
+    body_size: float
+    line_gap: float
+    page_width: float
+    page_height: float
+
+    @property
+    def paragraph_gap(self) -> float:
+        # 이 값은 줄 bbox 사이 "여백"(top-to-top 줄간격이 아니라 잉크 경계 사이 공백)과
+        # 비교된다 — line_gap(baseline 간 pitch)은 스케일이 안 맞아 여기엔 못 쓴다.
+        return self.body_size * 0.6
+
+    @property
+    def superscript_gap(self) -> float:
+        return self.body_size * 0.18
+
+    @property
+    def figure_margin(self) -> float:
+        return self.body_size * 3.2
+
+    @property
+    def min_table_width(self) -> float:
+        return self.page_width * 0.26
+
+    @property
+    def min_table_height(self) -> float:
+        return self.body_size * 3.5
+
+
+def measure_page(words: list, page_width: float, page_height: float) -> PageMetrics:
+    """words는 extract_page_blocks가 이미 뽑아둔 page.extract_words() 결과를 그대로
+    받는다 — pdfplumber의 단어 추출은 페이지당 한 번이면 충분해 다시 부르지 않는다."""
+    sizes = sorted(w["size"] for w in words if w.get("size", 0) > 0)
+    body_size = sizes[len(sizes) // 2] if sizes else 10.0
+
+    # 줄간격: 인접한 서로 다른 baseline 사이 거리의 중앙값
+    tops = sorted({round(w["top"], 1) for w in words})
+    gaps = [b - a for a, b in zip(tops, tops[1:]) if 0 < b - a < body_size * 3]
+    line_gap = sorted(gaps)[len(gaps) // 2] if gaps else body_size * 1.2
+
+    return PageMetrics(body_size, line_gap, page_width, page_height)
 
 
 # 공학 문서의 수식 번호 표기. "(2.12)", "(2.18a)"처럼 정상 문장에는 거의 안 나오는
@@ -39,7 +88,7 @@ for _lat, _grk in zip("ABGDEZHQIKLMNXOPRSTUFCYW", "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞ�
     _SYMBOL_FONT_MAP[0xF000 + ord(_lat)] = _grk
 _SYMBOL_FONT_MAP[0xF03D] = "="
 _SYMBOL_FONT_MAP[0xF02B] = "+"
-_SYMBOL_FONT_MAP[0xF0B7] = "·"
+_SYMBOL_FONT_MAP[0xF0B7] = "•"
 _SYMBOL_FONT_MAP[0xF0D7] = "×"
 _SYMBOL_FONT_MAP.update({
     0xF04A: "ϑ",   # J -> vartheta  (this document's temperature symbol)
@@ -170,13 +219,26 @@ def _table_filled_ratio(cells) -> float:
     return non_empty / len(flat)
 
 
-def _classify_table_candidates(page):
+def _is_real_table(t, cells, metrics: PageMetrics) -> bool:
+    if _table_filled_ratio(cells) < TABLE_MIN_FILLED_RATIO:
+        return False
+    rows, cols = len(cells), (len(cells[0]) if cells else 0)
+    if rows < 2 or cols < 2 or rows * cols < MIN_TABLE_CELLS:
+        return False
+    x0, top, x1, bottom = t.bbox
+    if (x1 - x0) < metrics.min_table_width or (bottom - top) < metrics.min_table_height:
+        return False  # ★ 라벨 크기 박스는 여기서 걸림
+    long_cells = sum(1 for row in cells for c in row if c and len(c.strip()) >= 5)
+    return long_cells >= MIN_LONG_CELLS
+
+
+def _classify_table_candidates(page, metrics: PageMetrics):
     """① 표 후보 유효성 검사 → ② 무효 후보는 figure 후보로 재분류."""
     valid_tables = []
     figure_bboxes = []
     for t in page.find_tables():
         cells = t.extract()
-        if _table_filled_ratio(cells) >= TABLE_MIN_FILLED_RATIO:
+        if _is_real_table(t, cells, metrics):
             valid_tables.append((t, _clean_cells(cells)))
         else:
             figure_bboxes.append(t.bbox)
@@ -305,10 +367,9 @@ def _word_in_zones(word, zones) -> bool:
 
 _SUPERSCRIPT_SIZE_RATIO = 0.8
 _SUPERSCRIPT_VERTICAL_SHIFT_PT = 1.0
-_SUPERSCRIPT_GAP_PT = 1.5
 
 
-def _merge_superscripts(line: list) -> list:
+def _merge_superscripts(line: list, metrics: PageMetrics) -> list:
     """상첨자/하첨자는 extract_words()가 폰트 크기·베이스라인이 다르다는 이유로
     같은 줄이어도 별도 단어로 떼어낸다 (실사용 중 발견: "963kg/m" + 상첨자 "3" →
     "963kg/m 3"로 깨짐). 바로 붙어 있고(gap 작음) 폰트가 뚜렷이 작고 수직으로
@@ -324,7 +385,7 @@ def _merge_superscripts(line: list) -> list:
             w["top"] < prev["top"] - _SUPERSCRIPT_VERTICAL_SHIFT_PT
             or w["bottom"] > prev["bottom"] + _SUPERSCRIPT_VERTICAL_SHIFT_PT
         )
-        if gap <= _SUPERSCRIPT_GAP_PT and size_drop and vertical_shift:
+        if gap <= metrics.superscript_gap and size_drop and vertical_shift:
             prev["text"] += w["text"]
             prev["x1"] = max(prev["x1"], w["x1"])
             prev["top"] = min(prev["top"], w["top"])
@@ -341,7 +402,7 @@ def _same_line(w, cur_top, cur_bottom):
     return h > 0 and overlap / h >= 0.5
 
 
-def _build_line_info(words) -> list:
+def _build_line_info(words, metrics: PageMetrics) -> list:
     """단어를 같은 y좌표(줄)로 묶고 상첨자를 병합해, 줄 단위 텍스트+bbox 목록을 만든다.
     문단 그룹핑(_group_words_to_blocks)과 도식 근처 라벨 흡수(_absorb_orphan_labels)가
     같은 줄 단위 표현을 공유한다."""
@@ -361,7 +422,7 @@ def _build_line_info(words) -> list:
     line_info = []
     for line in lines:
         line = sorted(line, key=lambda w: w["x0"])
-        line = _merge_superscripts(line)
+        line = _merge_superscripts(line, metrics)
         text = " ".join(w["text"] for w in line)
         x0 = min(w["x0"] for w in line)
         x1 = max(w["x1"] for w in line)
@@ -401,34 +462,34 @@ def _absorb_orphan_labels(figure_zones: list, lines: list, reach: float = _ORPHA
     return [tuple(z) for z in zones]
 
 
-def _join_lines(lines: list) -> str:
-    """줄 끝 하이픈 분철(독일어 문서에 매우 흔함, 예: "Milli-" + "kenleiter" →
-    "Millikenleiter")을 복원한다 — 실사용 중 발견: 하이픈을 그냥 공백으로 이으면
-    "Milli- kenleiter"로 남아 한 단어가 두 블록/문장으로 갈렸다. 다음 줄 첫 글자가
-    소문자일 때만 직결한다 — "Fulda-Main-Leitung"처럼 다음 글자가 대문자인 정상
-    복합어 하이픈은 그대로 둔다(독일어 명사는 항상 대문자로 시작하므로 이 구분이
-    유효하다)."""
+_NOISE_EDGE_RE = re.compile(r"^[\s,;]+|[\s,;·]+$")   # 선두 · 제거 규칙 삭제
+
+_BULLET_RE = re.compile(r"^\s*[•▪◦‣·\-–]\s+")
+
+def _join_lines(lines):
     out = ""
     for li in lines:
         t = li["text"]
-        if out.endswith("-") and t[:1].islower():
+        if _BULLET_RE.match(t):
+            out = (out + "\n" + t) if out else t      # ★ 불릿 줄은 줄바꿈 유지
+        elif out.endswith("-") and t[:1].islower():
             out = out[:-1] + t
         else:
             out = (out + " " + t) if out else t
     return out
 
 
-def _group_words_to_blocks(words, page_height):
+def _group_words_to_blocks(words, page_height, metrics: PageMetrics):
     header_cut = page_height * HEADER_FOOTER_MARGIN_RATIO
     footer_cut = page_height * (1 - HEADER_FOOTER_MARGIN_RATIO)
 
-    line_info = _build_line_info(words)
+    line_info = _build_line_info(words, metrics)
 
     sizes = [li["size"] for li in line_info if li["size"] > 0]
     median_size = sorted(sizes)[len(sizes) // 2] if sizes else 0
     # 캡션처럼 줄간격이 본문보다 넓은 텍스트는 고정 6pt 기준으로는 쪼개진다 —
-    # 폰트 크기에 비례한 값과 절대 하한 중 큰 쪽을 쓴다 (실사용 중 발견).
-    paragraph_gap = max(PARAGRAPH_GAP_PT, median_size * 0.6)
+    # 문서 실측 본문 크기·줄간격 배수로 계산해 문서마다 스케일한다 (실사용 중 발견).
+    paragraph_gap = metrics.paragraph_gap
 
     blocks = []
     para_lines = []
@@ -513,7 +574,9 @@ def extract_page_blocks(pdf_path, page_no: int) -> dict:
         if not all_words:
             return _scanned_page_result(page_no, page_width, page_height)
 
-        valid_tables, figure_bboxes = _classify_table_candidates(page)  # ①②
+        metrics = measure_page(all_words, page_width, page_height)
+
+        valid_tables, figure_bboxes = _classify_table_candidates(page, metrics)  # ①②
 
         # 유효한 표는 마진 없이 raw bbox로 제외한다 — figure와 달리 표는 이미지로
         # 크롭되지 않으므로, 마진에 걸린 캡션·직전 문장이 통째로 사라져 어디에도
@@ -521,16 +584,16 @@ def extract_page_blocks(pdf_path, page_no: int) -> dict:
         # 영역이 곧 크롭 이미지라 축 라벨·범례가 이미지 안에 시각적으로 남으므로 유지.
         table_zones = [tuple(t.bbox) for t, _cells in valid_tables]
         figure_zones = [
-            _expand_bbox(b, FIGURE_TABLE_MARGIN_PT, page_width, page_height)
+            _expand_bbox(b, metrics.figure_margin, page_width, page_height)
             for b in figure_bboxes
         ]  # ③
         # 축 눈금 숫자만 딱 떨어져 있으면 rect/line/curve가 없어 도식 후보에도
         # 안 걸리고 본문 제외에도 안 걸려 paragraph로 새어나간다 — 근처 zone으로 흡수.
-        figure_zones = _absorb_orphan_labels(figure_zones, _build_line_info(all_words))
+        figure_zones = _absorb_orphan_labels(figure_zones, _build_line_info(all_words, metrics))
         exclusion_zones = table_zones + figure_zones
 
         remaining_words = [w for w in all_words if not _word_in_zones(w, exclusion_zones)]  # ④
-        text_blocks = _group_words_to_blocks(remaining_words, page_height)
+        text_blocks = _group_words_to_blocks(remaining_words, page_height, metrics)
 
         blocks = []
         for t, cells in valid_tables:

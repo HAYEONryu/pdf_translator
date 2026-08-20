@@ -1,6 +1,7 @@
 """번역 라우팅·요청 구성·ID 검증·재번역 (SPEC.md §5.3)."""
 import base64
 import json
+import re
 
 from app.config import MODEL_SCANNED, MODEL_TEXT_ONLY, MODEL_WITH_TABLE_OR_FIGURE
 from app.translate.client import call_structured
@@ -9,11 +10,29 @@ from app.translate.prompts import SCANNED_SYSTEM_PROMPT, SYSTEM_PROMPT
 _EXCLUDED_TYPES = ("header_footer", "figure")
 
 
+def extraction_quality_score(page: dict) -> float:
+    """텍스트 추출 품질을 0~1로 점수화한다 — 고아 문자·PUA 잔여·짧은 블록이 많으면
+    낮게 나온다. choose_model()이 이 점수로 텍스트 대신 페이지 이미지 처리로 폴백할지 정한다."""
+    blocks = [b for b in page["blocks"] if b["type"] in ("paragraph", "heading")]
+    if not blocks:
+        return 0.0
+    text = " ".join(b["source"] or "" for b in blocks)
+    if len(text) < 80:
+        return 0.0
+    penalties = 0.0
+    penalties += min(1.0, len(re.findall(r"\s[a-zA-Z]\s", text)) / 20)  # 고아 문자
+    penalties += min(1.0, len(re.findall(r"[-]", text)) / 5)  # PUA 잔여
+    penalties += min(1.0, sum(1 for b in blocks if len(b["source"] or "") < 15) / len(blocks))
+    return max(0.0, 1.0 - penalties / 3)
+
+
 def choose_model(page: dict) -> str:
     if not page["has_text_layer"]:
         return MODEL_SCANNED
     has_table_or_figure = any(b["type"] in ("table", "figure") for b in page["blocks"])
-    return MODEL_WITH_TABLE_OR_FIGURE if has_table_or_figure else MODEL_TEXT_ONLY
+    if has_table_or_figure or extraction_quality_score(page) < 0.5:
+        return MODEL_WITH_TABLE_OR_FIGURE  # 텍스트 대신 페이지 이미지로 처리
+    return MODEL_TEXT_ONLY
 
 
 def _translatable_blocks(page: dict) -> list:
@@ -180,3 +199,38 @@ def _translate_scanned_page(page: dict, doc_title: str, image_png: bytes | None)
     block["source"] = result["source_md"]
     block["ko"] = result["ko_md"]
     return page
+
+
+def _demo() -> None:
+    """choose_model() 라우팅 회귀 검증 — API 호출 없이 순수 분기 로직만 검사한다."""
+    scanned = {"has_text_layer": False, "blocks": []}
+    assert choose_model(scanned) == MODEL_SCANNED
+
+    with_table = {"has_text_layer": True, "blocks": [{"type": "table", "source": None}]}
+    assert choose_model(with_table) == MODEL_WITH_TABLE_OR_FIGURE
+
+    clean_text = "This is a normal, cleanly extracted paragraph with plenty of readable content. " * 3
+    good_quality = {
+        "has_text_layer": True,
+        "blocks": [{"type": "paragraph", "source": clean_text}],
+    }
+    assert extraction_quality_score(good_quality) >= 0.5
+    assert choose_model(good_quality) == MODEL_TEXT_ONLY
+
+    # 고아 문자·PUA 잔여·짧은 블록 다수 — 추출 품질이 낮으면 텍스트 전용 모델
+    # 대신 이미지 처리 모델로 폴백해야 한다.
+    broken_text = " ".join(["a"] * 30) + " " + ""
+    low_quality = {
+        "has_text_layer": True,
+        "blocks": [{"type": "paragraph", "source": broken_text}],
+    }
+    assert extraction_quality_score(low_quality) < 0.5
+    assert choose_model(low_quality) == MODEL_WITH_TABLE_OR_FIGURE
+
+    assert extraction_quality_score({"has_text_layer": True, "blocks": []}) == 0.0
+
+    print("engine.py self-check OK")
+
+
+if __name__ == "__main__":
+    _demo()

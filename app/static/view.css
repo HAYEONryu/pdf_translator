@@ -15,11 +15,11 @@ body { margin: 0; font-family: "Malgun Gothic", sans-serif; background: #eee; }
 .compare { display: flex; }
 .pane { flex: 1; overflow: auto; height: calc(100vh - 49px); }
 
-.source-pane { background: #ccc; display: flex; flex-direction: column; align-items: center; padding: 24px; }
-.page-wrap {
-  position: relative; background: #fff; box-shadow: 0 0 6px rgba(0, 0, 0, .35);
-  width: min(100%, 720px);
-}
+.source-pane { background: #ccc; }          /* 회색 배경 + 흰 페이지 = 경계 뚜렷 */
+.page-wrap   { background:#fff; box-shadow: 0 0 6px rgba(0,0,0,.35); }
+
+.blocks      { border-bottom: 1px dashed #ddd; }   /* 점선 하나뿐 */
+
 .page-wrap img { display: block; width: 100%; height: 100%; object-fit: contain; }
 
 .overlay {
@@ -33,9 +33,23 @@ body { margin: 0; font-family: "Malgun Gothic", sans-serif; background: #eee; }
 .page-wrap { margin-bottom: 8px; }
 .page-label { margin-top: 4px; margin-bottom: 24px; font-size: 12px; color: #555; }
 
-.target-pane { background: #fff; padding: 24px; }
-.blocks { max-width: 640px; margin: 0 auto 24px; padding-bottom: 16px; border-bottom: 1px dashed #ddd; }
-.target-pane .page-label { max-width: 640px; margin: -16px auto 24px; text-align: right; }
+.target-pane { background: #ccc; padding: 24px; }
+.blocks {
+  background: #fff;
+  box-shadow: 0 0 6px rgba(0, 0, 0, .35);
+  width: min(100%, 640px);
+  margin: 0 auto 8px;
+  padding: 28px 24px;
+  border-bottom: none;          /* 점선 제거 — 그림자가 경계 역할 */
+  min-height: 120px;
+}
+.target-pane .page-label {
+  width: min(100%, 640px);
+  margin: 4px auto 24px;
+  text-align: center;           /* 좌측과 동일하게 */
+  font-size: 12px;
+  color: #555;
+}
 .page-skeleton { color: #999; font-size: 14px; padding: 16px 0; }
 .page-skeleton.error { color: #c0392b; }
 
@@ -66,6 +80,7 @@ body { margin: 0; font-family: "Malgun Gothic", sans-serif; background: #eee; }
 }
 
 .block-heading .block-text { font-weight: 700; font-size: 1.15em; }
+.block-text { white-space: pre-wrap; }
 
 .badge { position: absolute; right: 8px; top: 8px; cursor: help; font-size: 15px; }
 .badge.warn { color: #d9822b; }

@@ -10,7 +10,10 @@ Rules:
 4. For table blocks: preserve the exact number of rows and columns given in `cells_src`. Do not merge or split cells. Do not translate numeric-only cells; copy them exactly as given, including keeping a null cell as null.
 5. If glossary terms are provided in `terms`, you MUST use the given Korean translation for those terms wherever they appear.
 6. For technical/domain terms, use bilingual notation in the form "한국어(English)" the first natural place it appears in a block.
-7. Follow the provided structured output schema exactly. Do not add commentary, explanations, or markdown code fences."""
+7. Follow the provided structured output schema exactly. Do not add commentary, explanations, or markdown code fences.
+8. Preserve line breaks (\n) and bullet markers (•) exactly as in the source.
+   Never merge separate bullet items into one line.
+   """
 
 SCANNED_SYSTEM_PROMPT = """You are a technical document translator (source language -> Korean) for engineering/industry standards documents.
 You are given a full scanned page image with no machine-readable text layer.

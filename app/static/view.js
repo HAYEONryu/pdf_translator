@@ -92,6 +92,15 @@
       .join("");
   }
 
+  function syncPageHeights(pageNo) {
+    var s = document.getElementById("src-p" + pad3(pageNo));
+    var t = document.getElementById("tgt-p" + pad3(pageNo));
+    if (!s || !t) return;
+    t.style.minHeight = "";               // 리셋 후 재측정
+    var h = s.getBoundingClientRect().height;
+    if (t.getBoundingClientRect().height < h) t.style.minHeight = h + "px";
+  }
+
   function renderPage(pageNo, pageData) {
     var srcWrap = document.getElementById("src-p" + pad3(pageNo));
     var tgtWrap = document.getElementById("tgt-p" + pad3(pageNo));
@@ -99,7 +108,8 @@
 
     var overlays = overlayHtml(pageNo, pageData.page_width, pageData.page_height, pageData.blocks);
     srcWrap.insertAdjacentHTML("beforeend", overlays);
-    tgtWrap.innerHTML = blocksHtml(pageData.blocks, pageNo);
+    tgtWrap.innerHTML = blocksHtml(pageData.blocks, pageNo) ||
+      '<div class="page-skeleton">아직 번역되지 않은 페이지입니다</div>';
 
     for (var i = 0; i < pageData.blocks.length; i++) {
       var status = pageData.blocks[i].verify.status;
@@ -112,6 +122,8 @@
 
     doneCount++;
     progressLabel.textContent = doneCount + " / " + pageNumbers.length + " 페이지";
+
+    syncPageHeights(pageNo);
   }
 
   // ---- 초기 로드: 이미 캐시된 페이지 먼저 채우기 (새로고침·재접속용, SPEC.md §6) ----
@@ -168,6 +180,14 @@
   }
 
   loadStoredThenMaybeCreateJob();
+
+  // 원문 이미지는 loading="lazy"라 로드 시점에 높이가 0일 수 있다 — 로드 완료 시
+  // 한 번 더 맞춰준다 (renderPage() 시점엔 아직 이미지가 안 왔을 수 있음).
+  document.querySelectorAll(".source-pane .page-wrap").forEach(function (wrap) {
+    var img = wrap.querySelector("img");
+    var pageNo = Number(wrap.dataset.pageNo);
+    if (img) img.addEventListener("load", function () { syncPageHeights(pageNo); });
+  });
 
   // ---- 양방향 클릭 대조 ----
 

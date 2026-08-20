@@ -76,6 +76,7 @@ python -m app.storage
 python -m app.cache
 python -m app.glossary
 python -m app.extract.blocks
+python -m app.translate.engine
 python -m app.verify.check
 python -m app.ingest
 python -m app.jobs
