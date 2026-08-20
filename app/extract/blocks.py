@@ -119,8 +119,8 @@ def _fix_symbol_font_glyphs(text: str) -> str:
 # 블록 확정 후 노이즈 정리 — 구두점·공백 잔여물만 정리한다 (그리스 문자·수학 기호
 # 자체는 위에서 정상 유니코드로 복원된 뒤이므로 그대로 둔다).
 _NOISE_COMMA_RE = re.compile(r"\s*,\s*,+")
-_NOISE_SPACE_RE = re.compile(r"[ \t]{2,}")
-_NOISE_EDGE_RE = re.compile(r"^[\s,;·]+|[\s,;·]+$")
+_NOISE_SPACE_RE = re.compile(r"[ \t]{2,}")     # \s 쓰면 \n이 죽음
+_NOISE_EDGE_RE  = re.compile(r"^[ \t,;]+|[ \t,;·]+$")   # \s → 공백/탭으로
 
 
 def _clean_block_noise(text: str) -> str:
@@ -423,7 +423,11 @@ def _build_line_info(words, metrics: PageMetrics) -> list:
     for line in lines:
         line = sorted(line, key=lambda w: w["x0"])
         line = _merge_superscripts(line, metrics)
-        text = " ".join(w["text"] for w in line)
+        # Symbol 폰트 PUA 글리프를 여기서 미리 복원해야 한다 — _join_lines()의 불릿
+        # 판정(_BULLET_RE)이 이 줄 텍스트를 보는데, PUA를 나중에(_clean_block_noise)
+        # 복원하면 그때는 이미 문단 전체가 공백으로 합쳐진 뒤라 불릿 줄바꿈을 놓친다
+        # (실사용 중 발견: Symbol 폰트 "•"가 개행 없이 문장 중간에 이어 붙음).
+        text = _fix_symbol_font_glyphs(" ".join(w["text"] for w in line))
         x0 = min(w["x0"] for w in line)
         x1 = max(w["x1"] for w in line)
         top = min(w["top"] for w in line)
@@ -461,10 +465,7 @@ def _absorb_orphan_labels(figure_zones: list, lines: list, reach: float = _ORPHA
                 break
     return [tuple(z) for z in zones]
 
-
-_NOISE_EDGE_RE = re.compile(r"^[\s,;]+|[\s,;·]+$")   # 선두 · 제거 규칙 삭제
-
-_BULLET_RE = re.compile(r"^\s*[•▪◦‣·\-–]\s+")
+_BULLET_RE = re.compile(r"^\s*(?:[•▪◦‣∙]\s*|[·\-–—]\s+)")
 
 def _join_lines(lines):
     out = ""
