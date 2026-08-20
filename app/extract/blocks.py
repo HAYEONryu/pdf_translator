@@ -42,7 +42,26 @@ _SYMBOL_FONT_MAP[0xF03D] = "="
 _SYMBOL_FONT_MAP[0xF02B] = "+"
 _SYMBOL_FONT_MAP[0xF0B7] = "·"
 _SYMBOL_FONT_MAP[0xF0D7] = "×"
+_SYMBOL_FONT_MAP.update({
+    0xF04A: "ϑ",   # J -> vartheta  (this document's temperature symbol)
+    0xF06A: "φ",   # j -> phi variant
+    0xF02D: "−",   # - -> minus ("10^-6"'s minus sign)
+    0xF02F: "/",
+    0xF0A3: "≤", 0xF0B3: "≥", 0xF0B9: "≠", 0xF0BB: "≈",
+    0xF0B1: "±", 0xF0A5: "∞", 0xF0D6: "√",
+    0xF0E5: "∑", 0xF0F2: "∫", 0xF0B6: "∂", 0xF0D1: "∇",
+    0xF0AE: "→", 0xF0B0: "°",
+})
+# Symbol fonts keep digits/brackets/punctuation at the same ASCII code point.
+for _c in "0123456789()[]{}.,;:!?<>*":
+    _SYMBOL_FONT_MAP.setdefault(0xF000 + ord(_c), _c)
+
 _PUA_RANGE_RE = re.compile(r"[-]")
+
+
+# 복원 후에도 남는 PUA(매핑표에 없는 글리프) — 이게 2개 이상이면 이 블록은 폰트
+# 없이는 못 읽는 진짜 깨진 텍스트로 보고 번역을 시도하지 않는다 (아래 flush()에서 사용).
+_PUA_LEFT_RE = re.compile("[-]")
 
 
 def _fix_symbol_font_glyphs(text: str) -> str:
@@ -62,6 +81,24 @@ def _clean_block_noise(text: str) -> str:
     text = _NOISE_SPACE_RE.sub(" ", text)
     text = _NOISE_EDGE_RE.sub("", text)
     return text.strip()
+
+
+_UNIT_SUP_RE = re.compile(r"\b(mm|cm|m|kg|km)\s*([23])\b")
+
+
+def _clean_cells(cells: list) -> list:
+    """t.extract()로 나온 표 셀 문자열은 본문 단어 경로(_clean_block_noise 등)를 안
+    거쳐 PUA 글리프·상첨자 분리가 그대로 남는다 (실사용 중 발견: "3200 mm2" — 원문은
+    "3200 mm²". t.extract()는 word 좌표 없이 셀을 평문화해서, 상첨자가 공백 있는
+    "mm 2"와 붙어 있는 "mm2" 둘 다로 나온다). PUA 복원·노이즈 정리는 그대로
+    재사용하고, 상첨자는 위치 기반 복원이 불가능하므로 "단위 뒤 고아 숫자 2/3"
+    패턴만 차선책으로 위첨자화한다."""
+    def clean(c):
+        if not c:
+            return c
+        text = _clean_block_noise(c)
+        return _UNIT_SUP_RE.sub(lambda m: m.group(1) + ("²" if m.group(2) == "2" else "³"), text)
+    return [[clean(c) for c in row] for row in cells]
 
 
 def _is_real_word(token: str) -> bool:
@@ -141,7 +178,7 @@ def _classify_table_candidates(page):
     for t in page.find_tables():
         cells = t.extract()
         if _table_filled_ratio(cells) >= TABLE_MIN_FILLED_RATIO:
-            valid_tables.append((t, cells))
+            valid_tables.append((t, _clean_cells(cells)))
         else:
             figure_bboxes.append(t.bbox)
     diagram_bboxes = _detect_vector_diagram_bboxes(page, [t.bbox for t, _cells in valid_tables])
@@ -152,31 +189,72 @@ _DIAGRAM_CLUSTER_GAP_PT = 35.0
 _DIAGRAM_MIN_PRIMITIVES = 8
 
 
+def _bboxes_near(a, b, gap: float) -> bool:
+    """x/y 갭을 각각 독립적으로 본다 — x가 안 겹쳐도 가까우면 인접으로 친다
+    (실사용 중 발견: 3D 플롯의 그래프 본체와 축 눈금은 x 겹침 없이 옆으로 떨어져
+    있는데 같은 도식이다). 이전엔 x 겹침을 요구해서 이런 경우가 안 붙었다."""
+    near_x = not (b[0] - a[2] > gap or a[0] - b[2] > gap)
+    near_y = not (b[1] - a[3] > gap or a[1] - b[3] > gap)
+    return near_x and near_y
+
+
 def _cluster_primitive_bboxes(items: list, max_gap: float) -> list:
     """items: (bbox, is_image) 목록. (bbox, 원소 개수, 이미지 포함 여부)로 뭉친다.
     개수는 이 클러스터가 "진짜 도식"인지 판단하는 데 쓴다 (선 하나짜리 장식 밑줄과
     구분) — 단, 래스터 이미지가 하나라도 있으면 그 자체로 이미 도식이므로 개수와
     무관하게 인정한다 (실사용 중 발견: 실린더 도면이 이미지 하나뿐이라 rect/line
-    개수 기준을 못 넘어 사라짐)."""
+    개수 기준을 못 넘어 사라짐).
+
+    2단계로 병합한다 — 원소가 페이지당 수만 개(curves 해칭 디테일)까지 나와서,
+    A-B-C 체인을 전부 서로 비교하는 전이적 병합을 처음부터 하면 O(n²)이라 너무
+    느리다 (실측: 한 페이지 14000+ curves).
+    ① y 정렬 후 단일 패스로 빠르게 큰 덩어리로 줄인다 (O(n log n)).
+    ② ①로 크게 줄어든 소수의 후보만 전이적으로 한 번 더 붙인다 — 정렬 순서상
+       안 붙는 A-B-C 체인(가운데 B가 다리 역할)을 여기서 마저 붙인다. 변화가
+       없을 때까지 반복한다. 후보 수가 적어(보통 수십 개 이하) O(m²) 반복이어도
+       안전하다."""
     if not items:
         return []
-    items = sorted(items, key=lambda it: it[0][1])
-    b0, img0 = items[0]
-    clusters = [[list(b0), 1, img0]]
-    for b, is_image in items[1:]:
-        bbox, count, has_image = clusters[-1]
-        x_overlap = not (b[2] <= bbox[0] or bbox[2] <= b[0])
-        gap = b[1] - bbox[3]
-        if x_overlap and gap <= max_gap:
-            bbox[0] = min(bbox[0], b[0])
-            bbox[1] = min(bbox[1], b[1])
-            bbox[2] = max(bbox[2], b[2])
-            bbox[3] = max(bbox[3], b[3])
-            clusters[-1][1] += 1
-            clusters[-1][2] = has_image or is_image
+
+    # ① 빠른 1차 병합
+    sorted_items = sorted(items, key=lambda it: it[0][1])
+    b0, img0 = sorted_items[0]
+    merged = [[list(b0), 1, img0]]
+    for b, is_image in sorted_items[1:]:
+        last = merged[-1]
+        if _bboxes_near(last[0], b, max_gap):
+            last[0][0] = min(last[0][0], b[0])
+            last[0][1] = min(last[0][1], b[1])
+            last[0][2] = max(last[0][2], b[2])
+            last[0][3] = max(last[0][3], b[3])
+            last[1] += 1
+            last[2] = last[2] or is_image
         else:
-            clusters.append([list(b), 1, is_image])
-    return [(tuple(bbox), count, has_image) for bbox, count, has_image in clusters]
+            merged.append([list(b), 1, is_image])
+
+    # ② 전이적 2차 병합 — ①이 만든 소수의 후보에만 적용.
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(merged)):
+            if merged[i] is None:
+                continue
+            for j in range(i + 1, len(merged)):
+                if merged[j] is None:
+                    continue
+                a, b = merged[i], merged[j]
+                if _bboxes_near(a[0], b[0], max_gap):
+                    a[0][0] = min(a[0][0], b[0][0])
+                    a[0][1] = min(a[0][1], b[0][1])
+                    a[0][2] = max(a[0][2], b[0][2])
+                    a[0][3] = max(a[0][3], b[0][3])
+                    a[1] += b[1]
+                    a[2] = a[2] or b[2]
+                    merged[j] = None
+                    changed = True
+        merged = [m for m in merged if m is not None]
+
+    return [(tuple(bbox), count, has_image) for bbox, count, has_image in merged]
 
 
 def _detect_vector_diagram_bboxes(page, valid_table_bboxes: list) -> list:
@@ -257,10 +335,10 @@ def _merge_superscripts(line: list) -> list:
     return merged
 
 
-def _group_words_to_blocks(words, page_height):
-    header_cut = page_height * HEADER_FOOTER_MARGIN_RATIO
-    footer_cut = page_height * (1 - HEADER_FOOTER_MARGIN_RATIO)
-
+def _build_line_info(words) -> list:
+    """단어를 같은 y좌표(줄)로 묶고 상첨자를 병합해, 줄 단위 텍스트+bbox 목록을 만든다.
+    문단 그룹핑(_group_words_to_blocks)과 도식 근처 라벨 흡수(_absorb_orphan_labels)가
+    같은 줄 단위 표현을 공유한다."""
     words = sorted(words, key=lambda w: (round(w["top"], 1), w["x0"]))
     lines, cur_line, cur_top = [], [], None
     for w in words:
@@ -284,9 +362,66 @@ def _group_words_to_blocks(words, page_height):
         bottom = max(w["bottom"] for w in line)
         size = sum(w.get("size", 0) for w in line) / len(line)
         line_info.append({"text": text, "bbox": (x0, top, x1, bottom), "size": size})
+    return line_info
+
+
+_AXIS_LABEL_RE = re.compile(r"^[-+]?[\d.,]+(?:[eE][-+]?\d+)?$")
+_ORPHAN_LABEL_REACH_PT = 45.0
+
+
+def _absorb_orphan_labels(figure_zones: list, lines: list, reach: float = _ORPHAN_LABEL_REACH_PT) -> list:
+    """도식 근처의 "축 눈금처럼 생긴 줄"을 zone에 흡수한다 — find_tables()/벡터
+    클러스터링 둘 다 못 잡는 경우가 있다: 축 눈금 숫자만 딱 떨어져 있으면 rect/line/
+    curve가 없어 도식 후보에도 안 걸리고, 본문 words 제외에도 안 걸려 paragraph로
+    새어나간다(실사용 중 발견). 줄 전체가 숫자형이거나(눈금) 아주 짧으면(범례 토막)
+    도식 라벨로 보고, zone과 가까우면(reach pt 이내) zone을 그 줄까지 확장한다."""
+    zones = [list(z) for z in figure_zones]
+    for li in lines:
+        toks = li["text"].split()
+        if not toks:
+            continue
+        # 전부 숫자형이거나, 평균 토큰 길이가 아주 짧으면 축 라벨/범례로 본다
+        numeric = sum(1 for t in toks if _AXIS_LABEL_RE.match(t)) / len(toks)
+        if numeric < 0.7 and len(li["text"]) > 25:
+            continue
+        x0, top, x1, bot = li["bbox"]
+        for z in zones:
+            if (x0 < z[2] + reach and x1 > z[0] - reach
+                    and top < z[3] + reach and bot > z[1] - reach):
+                z[0], z[1] = min(z[0], x0), min(z[1], top)
+                z[2], z[3] = max(z[2], x1), max(z[3], bot)
+                break
+    return [tuple(z) for z in zones]
+
+
+def _join_lines(lines: list) -> str:
+    """줄 끝 하이픈 분철(독일어 문서에 매우 흔함, 예: "Milli-" + "kenleiter" →
+    "Millikenleiter")을 복원한다 — 실사용 중 발견: 하이픈을 그냥 공백으로 이으면
+    "Milli- kenleiter"로 남아 한 단어가 두 블록/문장으로 갈렸다. 다음 줄 첫 글자가
+    소문자일 때만 직결한다 — "Fulda-Main-Leitung"처럼 다음 글자가 대문자인 정상
+    복합어 하이픈은 그대로 둔다(독일어 명사는 항상 대문자로 시작하므로 이 구분이
+    유효하다)."""
+    out = ""
+    for li in lines:
+        t = li["text"]
+        if out.endswith("-") and t[:1].islower():
+            out = out[:-1] + t
+        else:
+            out = (out + " " + t) if out else t
+    return out
+
+
+def _group_words_to_blocks(words, page_height):
+    header_cut = page_height * HEADER_FOOTER_MARGIN_RATIO
+    footer_cut = page_height * (1 - HEADER_FOOTER_MARGIN_RATIO)
+
+    line_info = _build_line_info(words)
 
     sizes = [li["size"] for li in line_info if li["size"] > 0]
     median_size = sorted(sizes)[len(sizes) // 2] if sizes else 0
+    # 캡션처럼 줄간격이 본문보다 넓은 텍스트는 고정 6pt 기준으로는 쪼개진다 —
+    # 폰트 크기에 비례한 값과 절대 하한 중 큰 쪽을 쓴다 (실사용 중 발견).
+    paragraph_gap = max(PARAGRAPH_GAP_PT, median_size * 0.6)
 
     blocks = []
     para_lines = []
@@ -298,7 +433,7 @@ def _group_words_to_blocks(words, page_height):
         top = min(li["bbox"][1] for li in para_lines)
         x1 = max(li["bbox"][2] for li in para_lines)
         bottom = max(li["bbox"][3] for li in para_lines)
-        text = _clean_block_noise(" ".join(li["text"] for li in para_lines))
+        text = _clean_block_noise(_join_lines(para_lines))
         if not text:
             return  # 노이즈 정리 후 남는 게 없으면 블록 자체를 만들지 않는다
         avg_size = sum(li["size"] for li in para_lines) / len(para_lines)
@@ -310,9 +445,12 @@ def _group_words_to_blocks(words, page_height):
         )
         # 단독 라틴 1~2글자(숫자 제외)는 도식에서 새어나온 라벨/기호일 뿐 문장이 아니다.
         is_stray_symbol = len(text) <= 2 and not text.isdigit()
+        # 매핑표에 없는 Symbol 폰트 PUA 글리프가 2개 이상 남으면 원래 폰트 없이는
+        # 못 읽는 문자라, 번역을 시도하는 대신 원본 그대로 보존하는 figure로 뺀다.
+        has_unreliable_pua = len(_PUA_LEFT_RE.findall(text)) >= 2
         if bottom <= header_cut or top >= footer_cut:
             btype = "header_footer"
-        elif is_stray_symbol or _looks_like_formula(text):
+        elif is_stray_symbol or has_unreliable_pua or _looks_like_formula(text):
             btype = "figure"  # 수식/도식 잔여 기호 — 번역·검증 대상에서 제외
         elif is_heading:
             btype = "heading"
@@ -323,7 +461,7 @@ def _group_words_to_blocks(words, page_height):
     prev_bottom = None
     for li in line_info:
         top = li["bbox"][1]
-        if prev_bottom is not None and (top - prev_bottom) > PARAGRAPH_GAP_PT:
+        if prev_bottom is not None and (top - prev_bottom) > paragraph_gap:
             flush()
             para_lines = []
         para_lines.append(li)
@@ -379,6 +517,9 @@ def extract_page_blocks(pdf_path, page_no: int) -> dict:
             _expand_bbox(b, FIGURE_TABLE_MARGIN_PT, page_width, page_height)
             for b in figure_bboxes
         ]  # ③
+        # 축 눈금 숫자만 딱 떨어져 있으면 rect/line/curve가 없어 도식 후보에도
+        # 안 걸리고 본문 제외에도 안 걸려 paragraph로 새어나간다 — 근처 zone으로 흡수.
+        figure_zones = _absorb_orphan_labels(figure_zones, _build_line_info(all_words))
         exclusion_zones = table_zones + figure_zones
 
         remaining_words = [w for w in all_words if not _word_in_zones(w, exclusion_zones)]  # ④
@@ -529,6 +670,19 @@ def _demo() -> None:
     )
     assert "GOK" not in p70_paragraph_text, "도식 라벨이 본문 블록으로 유출됨"
     assert any(b["type"] == "figure" for b in p70["blocks"]), "벡터 도식이 figure로 안 잡힘"
+
+    # Symbol 폰트 PUA 확장 매핑: "ϑ"(vartheta, 이 문서의 온도 기호)가 복원되고,
+    # 매핑 안 된 PUA 잔여 문자가 하나도 없어야 한다 (실사용 중 발견)
+    assert "ϑ" in all_p20_text, "vartheta가 PUA에서 복원 안 됨"
+    assert not re.search(r"[-]", all_p20_text), "PUA 잔여 문자 있음"
+
+    # 도식 라벨/축 눈금 유출 방지 (실사용 중 발견: 전류 밀도 라벨 중복, 축 눈금 숫자 유출)
+    p19 = extract_page_blocks(pdf_path, 19)
+    para19 = " ".join(
+        b["source"] or "" for b in p19["blocks"] if b["type"] in ("paragraph", "heading")
+    )
+    assert "Stromdichte" not in para19, "도식 라벨이 본문으로 유출됨"
+    assert "1.5e+06" not in para19, "축 눈금이 본문으로 유출됨"
 
     print("blocks.py self-check OK")
 

@@ -52,16 +52,13 @@
       }).join("") + "</table>";
     }
     if (b.type === "figure") {
-      // 대조 뷰는 왼쪽에 원문 페이지 전체가 이미지로 떠 있으므로, 오른쪽에 크롭을
-      // 또 넣지 않는다 — 벡터 클러스터링이 실패하면 깨진 크롭이 그대로 노출되고,
-      // 좁은 크롭이 패널 폭에 맞춰 늘어나 흐릿하게 확대돼 보이는 문제도 있었다
-      // (실사용 중 발견). 왼쪽 원문 클릭으로 대조하고 여기는 안내만 보여준다.
-      // 크롭 이미지는 원문이 없는 DOCX/HTML 내보내기에서만 쓴다.
+      // 수식: 텍스트 기반 bbox라 좌표가 정확 → 크롭 이미지가 안전
       if (b.source) {
-        // 수식은 PUA 폰트라 텍스트로 못 읽지만 원문 자체는 보존돼 있으니, 이미지
-        // 대신 텍스트로 보여줘 그대로 복사할 수 있게 한다.
-        return '<div class="formula-text" title="수식 원문 - 번역 대상 아님, 복사 가능">' + escapeHtml(b.source) + "</div>";
+        return '<img class="formula-img" loading="lazy"' +
+              ' src="/doc/' + sha + '/crop/' + pad3(pageNo) + '/' + b.id + '.png"' +
+              ' alt="' + escapeHtml(b.source) + '">';
       }
+      // 도식: 벡터 클러스터 bbox라 부정확할 수 있음 → 좌측 참조 유지
       return '<div class="figure-ref">[그림 - 좌측 원문 참조]</div>';
     }
     if (b.type === "header_footer") return '<div class="hf-text">' + escapeHtml(b.source) + "</div>";
