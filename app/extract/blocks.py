@@ -471,7 +471,7 @@ def _join_lines(lines):
     for li in lines:
         t = li["text"]
         if _BULLET_RE.match(t):
-            out = (out + "\n" + t) if out else t      # ★ 불릿 줄은 줄바꿈 유지
+            out = (out + "\n" + t) if out else t     # 불릿 줄은 개행 유지
         elif out.endswith("-") and t[:1].islower():
             out = out[:-1] + t
         else:

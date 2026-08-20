@@ -92,7 +92,14 @@ async def _handle_page(job: Job, pdf_path: str, semaphore: asyncio.Semaphore, pa
     job.done_count += 1
     _count_verify(job, page["blocks"])
     # ② 검증(+재번역) 완료 후에만 push — 이 시점 이전엔 어떤 이벤트도 내보내지 않는다.
-    _emit(job, {"type": "page_done", "page": page_no, "blocks": page["blocks"], "cached": prep["cache_hit"]})
+    _emit(job, {
+        "type": "page_done",
+        "page": page_no,
+        "page_width": page["page_width"],
+        "page_height": page["page_height"],
+        "blocks": page["blocks"],
+        "cached": prep["cache_hit"],
+    })
     _emit(job, {"type": "progress", "done": job.done_count, "total": len(job.page_numbers)})
 
 

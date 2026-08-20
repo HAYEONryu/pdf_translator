@@ -31,10 +31,11 @@
       .filter(function (b) { return b.type !== "header_footer"; })
       .map(function (b) {
         var isFigure = b.type === "figure";
-        var left = (b.bbox[0] / pageWidth) * 100;
-        var top = (b.bbox[1] / pageHeight) * 100;
-        var width = ((b.bbox[2] - b.bbox[0]) / pageWidth) * 100;
-        var height = ((b.bbox[3] - b.bbox[1]) / pageHeight) * 100;
+        // overlayHtml 안
+        var left   = Math.max(0, (b.bbox[0] / pageWidth) * 100);
+        var top    = Math.max(0, (b.bbox[1] / pageHeight) * 100);
+        var width  = Math.min(100 - left, ((b.bbox[2] - b.bbox[0]) / pageWidth) * 100);
+        var height = Math.min(100 - top,  ((b.bbox[3] - b.bbox[1]) / pageHeight) * 100);
         return (
           '<div class="overlay' + (isFigure ? " is-figure" : "") + '" data-block-id="' + b.id +
           '" data-verify="' + b.verify.status + '"' +
@@ -106,6 +107,11 @@
     var tgtWrap = document.getElementById("tgt-p" + pad3(pageNo));
     if (!srcWrap || !tgtWrap) return;
 
+    // 템플릿의 aspect-ratio는 문서 대표값(meta.json) 1개로 고정 렌더된다 — 이 페이지가
+    // 가로/세로가 섞인 문서 중 다른 비율이면 이미지가 찌그러지고 그 위 오버레이(%
+    // 기준)도 어긋난다. 실제 페이지 치수로 갱신.
+    srcWrap.style.aspectRatio = pageData.page_width + " / " + pageData.page_height;
+
     var overlays = overlayHtml(pageNo, pageData.page_width, pageData.page_height, pageData.blocks);
     srcWrap.insertAdjacentHTML("beforeend", overlays);
     tgtWrap.innerHTML = blocksHtml(pageData.blocks, pageNo) ||
@@ -166,7 +172,11 @@
     es.onmessage = function (evt) {
       var payload = JSON.parse(evt.data);
       if (payload.type === "page_done") {
-        renderPage(payload.page, { blocks: payload.blocks, page_width: viewData.pageWidth, page_height: viewData.pageHeight });
+        renderPage(payload.page, {
+          blocks: payload.blocks,
+          page_width:  payload.page_width  || viewData.pageWidth,
+          page_height: payload.page_height || viewData.pageHeight,
+        });
       } else if (payload.type === "page_error") {
         var tgtWrap = document.getElementById("tgt-p" + pad3(payload.page));
         if (tgtWrap) tgtWrap.innerHTML = '<div class="page-skeleton error">번역 실패: ' + escapeHtml(payload.reason) + "</div>";
