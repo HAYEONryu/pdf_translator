@@ -54,8 +54,12 @@
     if (b.type === "figure") {
       // 수식: 텍스트 기반 bbox라 좌표가 정확 → 크롭 이미지가 안전
       if (b.source) {
+        var q = "x0=" + b.bbox[0].toFixed(2) +
+                "&top=" + b.bbox[1].toFixed(2) +
+                "&x1=" + b.bbox[2].toFixed(2) +
+                "&bottom=" + b.bbox[3].toFixed(2);
         return '<img class="formula-img" loading="lazy"' +
-              ' src="/doc/' + sha + '/crop/' + pad3(pageNo) + '/' + b.id + '.png"' +
+              ' src="/doc/' + sha + '/crop/' + pageNo + '.png?' + q + '"' +
               ' alt="' + escapeHtml(b.source) + '">';
       }
       // 도식: 벡터 클러스터 bbox라 부정확할 수 있음 → 좌측 참조 유지

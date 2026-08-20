@@ -56,7 +56,14 @@ body { margin: 0; font-family: "Malgun Gothic", sans-serif; background: #eee; }
   background: #f6f6f6; border: 1px solid #e0e0e0; border-radius: 3px; padding: 6px 8px;
   user-select: text;
 }
-.formula-img { display: block; max-width: 100%; height: auto; margin: .6em 0; }
+.formula-img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: .6em 0;
+  background: #fafafa;
+  border: 1px solid #eee;
+}
 
 .block-heading .block-text { font-weight: 700; font-size: 1.15em; }
 

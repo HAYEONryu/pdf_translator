@@ -16,7 +16,6 @@ from app.config import (
     HEADING_SIZE_RATIO,
     PARAGRAPH_GAP_PT,
     RENDER_SCALE,
-    SAME_LINE_Y_TOLERANCE_PT,
     TABLE_MIN_FILLED_RATIO,
 )
 
@@ -335,19 +334,27 @@ def _merge_superscripts(line: list) -> list:
     return merged
 
 
+def _same_line(w, cur_top, cur_bottom):
+    """폰트 크기가 달라도(첨자) 세로로 겹치면 같은 줄로 본다."""
+    overlap = min(w["bottom"], cur_bottom) - max(w["top"], cur_top)
+    h = min(w["bottom"] - w["top"], cur_bottom - cur_top)
+    return h > 0 and overlap / h >= 0.5
+
+
 def _build_line_info(words) -> list:
     """단어를 같은 y좌표(줄)로 묶고 상첨자를 병합해, 줄 단위 텍스트+bbox 목록을 만든다.
     문단 그룹핑(_group_words_to_blocks)과 도식 근처 라벨 흡수(_absorb_orphan_labels)가
     같은 줄 단위 표현을 공유한다."""
     words = sorted(words, key=lambda w: (round(w["top"], 1), w["x0"]))
-    lines, cur_line, cur_top = [], [], None
+    lines, cur_line, cur_top, cur_bottom = [], [], None, None
     for w in words:
-        if cur_top is None or abs(w["top"] - cur_top) <= SAME_LINE_Y_TOLERANCE_PT:
+        if cur_top is None or _same_line(w, cur_top, cur_bottom):
             cur_line.append(w)
-            cur_top = w["top"] if cur_top is None else cur_top
+            cur_top = w["top"] if cur_top is None else min(cur_top, w["top"])
+            cur_bottom = w["bottom"] if cur_bottom is None else max(cur_bottom, w["bottom"])
         else:
             lines.append(cur_line)
-            cur_line, cur_top = [w], w["top"]
+            cur_line, cur_top, cur_bottom = [w], w["top"], w["bottom"]
     if cur_line:
         lines.append(cur_line)
 
@@ -675,6 +682,10 @@ def _demo() -> None:
     # 매핑 안 된 PUA 잔여 문자가 하나도 없어야 한다 (실사용 중 발견)
     assert "ϑ" in all_p20_text, "vartheta가 PUA에서 복원 안 됨"
     assert not re.search(r"[-]", all_p20_text), "PUA 잔여 문자 있음"
+
+    # 같은 줄 판정을 top거리 대신 세로 겹침 비율로 바꾼 회귀 방지: 첨자(ϑ0)가
+    # 다른 폰트 크기 때문에 별도 줄로 분리되면 안 됨 (실사용 중 발견)
+    assert "ϑ0" in all_p20_text or "ϑ₀" in all_p20_text, "아래첨자가 분리됨"
 
     # 도식 라벨/축 눈금 유출 방지 (실사용 중 발견: 전류 밀도 라벨 중복, 축 눈금 숫자 유출)
     p19 = extract_page_blocks(pdf_path, 19)

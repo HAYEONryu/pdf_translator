@@ -18,7 +18,6 @@ FIGURE_MERGE_MAX_GAP_PT = 60.0
 # ★ 5%(0.05)는 실제 샘플 문서의 풋터를 못 잡았다 — 풋터가 페이지 높이의 94.0%(0.940)에
 # 있는데 본문 마지막 줄은 89.5% 이하에서 끝나서, 8%(0.08)로 넉넉히 잡아도 본문은 안 걸린다.
 HEADER_FOOTER_MARGIN_RATIO = 0.08
-SAME_LINE_Y_TOLERANCE_PT = 2.5
 PARAGRAPH_GAP_PT = 6.0
 HEADING_SIZE_RATIO = 1.2
 HEADING_MAX_CHARS = 80

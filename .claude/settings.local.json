@@ -13,7 +13,10 @@
       "Bash(curl *)",
       "Bash(python -c ' *)",
       "Read(//tmp/**)",
-      "Bash(xxd)"
+      "Bash(xxd)",
+      "Bash(awk 'NR==684' app/extract/blocks.py)",
+      "Bash(python -m app.extract.blocks)",
+      "PowerShell(winget upgrade *)"
     ]
   }
 }
