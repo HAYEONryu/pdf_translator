@@ -16,7 +16,10 @@
       "Bash(xxd)",
       "Bash(awk 'NR==684' app/extract/blocks.py)",
       "Bash(python -m app.extract.blocks)",
-      "PowerShell(winget upgrade *)"
+      "PowerShell(winget upgrade *)",
+      "Bash(PYTHONIOENCODING=utf-8 python -c ' *)",
+      "Bash(python -m app.translate.engine)",
+      "Bash(python -m app.verify.check)"
     ]
   }
 }

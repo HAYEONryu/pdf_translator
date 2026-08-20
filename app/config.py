@@ -54,7 +54,7 @@ MODEL_SCANNED = "gpt-5.6-terra"
 # 반드시 올린다 — 캐시 키가 이 값+용어집+모델만 보므로, 안 올리면 로직을 고쳐도 옛날
 # 캐시가 그대로 나온다 (실사용 중 발견: 지금은 figure로 잡힐 블록이 예전 캐시엔
 # paragraph로 번역된 채 남아있었음).
-PROMPT_VER = "v4"
+PROMPT_VER = "v6"
 
 # 규격번호/품번 마스킹 패턴 (SPEC.md §5.4) — ponytail: 휴리스틱, 실제 문서로 튜닝 필요
 #

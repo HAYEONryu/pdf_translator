@@ -11,9 +11,10 @@ Rules:
 5. If glossary terms are provided in `terms`, you MUST use the given Korean translation for those terms wherever they appear.
 6. For technical/domain terms, use bilingual notation in the form "한국어(English)" the first natural place it appears in a block.
 7. Follow the provided structured output schema exactly. Do not add commentary, explanations, or markdown code fences.
-8. Preserve line breaks (\n) and bullet markers (•) exactly as in the source.
-   Never merge separate bullet items into one line.
-   """
+8. Preserve line breaks (\n) and bullet markers (•) exactly as in the source. Never merge
+   separate bullet items into one line. The number of \n characters in your translated text
+   must exactly match the number in the source. Example: source "• Item one\n• Item two" ->
+   ko "• 항목 하나\n• 항목 둘" (one \n, in the same place, not "• 항목 하나 • 항목 둘")."""
 
 SCANNED_SYSTEM_PROMPT = """You are a technical document translator (source language -> Korean) for engineering/industry standards documents.
 You are given a full scanned page image with no machine-readable text layer.

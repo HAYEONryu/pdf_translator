@@ -53,18 +53,16 @@
       }).join("") + "</table>";
     }
     if (b.type === "figure") {
-      // 수식: 텍스트 기반 bbox라 좌표가 정확 → 크롭 이미지가 안전
-      if (b.source) {
-        var q = "x0=" + b.bbox[0].toFixed(2) +
-                "&top=" + b.bbox[1].toFixed(2) +
-                "&x1=" + b.bbox[2].toFixed(2) +
-                "&bottom=" + b.bbox[3].toFixed(2);
-        return '<img class="formula-img" loading="lazy"' +
-              ' src="/doc/' + sha + '/crop/' + pageNo + '.png?' + q + '"' +
-              ' alt="' + escapeHtml(b.source) + '">';
-      }
-      // 도식: 벡터 클러스터 bbox라 부정확할 수 있음 → 좌측 참조 유지
-      return '<div class="figure-ref">[그림 - 좌측 원문 참조]</div>';
+      // 수식(source 있음)은 텍스트 기반 bbox라 좌표가 정확. 도식(source 없음)은
+      // 벡터 클러스터 bbox라 살짝 부정확할 수 있지만(여백 과다/축 라벨 잘림 등),
+      // 텍스트 placeholder보다는 대략적인 크롭 이미지가 더 유용하다 (사용자 요청).
+      var q = "x0=" + b.bbox[0].toFixed(2) +
+              "&top=" + b.bbox[1].toFixed(2) +
+              "&x1=" + b.bbox[2].toFixed(2) +
+              "&bottom=" + b.bbox[3].toFixed(2);
+      return '<img class="formula-img" loading="lazy"' +
+            ' src="/doc/' + sha + '/crop/' + pageNo + '.png?' + q + '"' +
+            ' alt="' + (b.source ? escapeHtml(b.source) : "그림") + '">';
     }
     if (b.type === "header_footer") return '<div class="hf-text">' + escapeHtml(b.source) + "</div>";
     return '<div class="block-text">' + escapeHtml(b.ko || b.source) + "</div>";

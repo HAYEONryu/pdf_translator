@@ -70,7 +70,6 @@ body { margin: 0; font-family: "Malgun Gothic", sans-serif; background: #eee; }
 .block-header_footer:hover { background: transparent; }
 
 .block-figure { color: #888; }
-.figure-ref { font-style: italic; }
 .formula-text {
   font-family: "Cambria Math", "Consolas", monospace; white-space: pre-wrap;
   background: #f6f6f6; border: 1px solid #e0e0e0; border-radius: 3px; padding: 6px 8px;

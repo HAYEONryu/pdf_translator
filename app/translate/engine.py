@@ -159,6 +159,13 @@ def retranslate_block(block: dict, missing_items: list, doc_title: str, terms: l
         f"The following items were missing from your previous translation of this block: {missing_items}. "
         "You MUST include them verbatim in the retranslation."
     )
+    if "줄바꿈 구조 불일치" in missing_items:
+        # "verbatim" 지시는 구조 문제엔 안 맞는다 — 정확한 목표 개수를 직접 줘야 한다.
+        newline_count = (block.get("source") or "").count("\n")
+        note += (
+            f" Specifically, your `ko` text must contain exactly {newline_count} '\\n' "
+            "character(s), one before each bullet/list item, in the same positions as `source`."
+        )
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False) + "\n\n" + note},
